@@ -11,8 +11,7 @@ import (
 
 	"github.com/GODanilich/tsu-schedule/internal/config"
 	"github.com/GODanilich/tsu-schedule/internal/handler"
-	"github.com/GODanilich/tsu-schedule/internal/intime"
-	"github.com/GODanilich/tsu-schedule/internal/schedule"
+	"github.com/GODanilich/tsu-schedule/internal/intimeparser"
 )
 
 func main() {
@@ -27,16 +26,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	location, err := time.LoadLocation(cfg.Timezone)
+	scheduleService, err := intimeparser.NewScheduleService(cfg)
 	if err != nil {
-		slog.Error("load timezone", "error", err, "timezone", cfg.Timezone)
+		slog.Error("initialize InTime parser", "error", err)
 		os.Exit(1)
 	}
 
-	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
-
-	intimeClient := intime.NewClient(cfg.InTimeBaseURL, httpClient, location)
-	scheduleService := schedule.NewService(intimeClient, location)
 	scheduleHandler := handler.NewScheduleHandler(scheduleService, cfg.GroupID)
 
 	router := chi.NewRouter()
