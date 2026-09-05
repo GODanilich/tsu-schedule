@@ -11,12 +11,13 @@ import (
 )
 
 type ScheduleHandler struct {
-	service *schedule.Service
-	groupID string
+	service   *schedule.Service
+	groupID   string
+	refresher *schedule.Refresher
 }
 
-func NewScheduleHandler(service *schedule.Service, groupID string) *ScheduleHandler {
-	return &ScheduleHandler{service: service, groupID: groupID}
+func NewScheduleHandler(service *schedule.Service, groupID string, refresher *schedule.Refresher) *ScheduleHandler {
+	return &ScheduleHandler{service: service, groupID: groupID, refresher: refresher}
 }
 
 func (h *ScheduleHandler) Routes() chi.Router {
@@ -24,6 +25,7 @@ func (h *ScheduleHandler) Routes() chi.Router {
 	r.Get("/today", h.getToday)
 	r.Get("/day", h.getDay)
 	r.Get("/week", h.getWeek)
+	r.Put("/cache", h.refreshCache)
 	return r
 }
 
@@ -64,6 +66,35 @@ func (h *ScheduleHandler) getWeek(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, days)
 }
 
+func (h *ScheduleHandler) refreshCache(w http.ResponseWriter, r *http.Request) {
+	date := time.Now()
+	if value := r.URL.Query().Get("date"); value != "" {
+		parsed, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			writeErrorMessage(w, http.StatusBadRequest, "date must have format YYYY-MM-DD")
+			return
+		}
+		date = parsed
+	}
+
+	days, err := h.refresher.RefreshWeek(r.Context(), h.groupID, date)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"week":   days[0].Date.Format("2006-01-02"),
+		"synced": countLessons(days),
+	})
+}
+
+func countLessons(days []schedule.Day) int {
+	count := 0
+	for _, day := range days {
+		count += len(day.Lessons)
+	}
+	return count
+}
 func parseQueryDate(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
 	value := r.URL.Query().Get("date")
 	if value == "" {
