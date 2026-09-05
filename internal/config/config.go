@@ -9,11 +9,14 @@ import (
 )
 
 type Config struct {
-	HTTPPort      string
-	InTimeBaseURL string
-	GroupID       string
-	Timezone      string
-	HTTPTimeout   time.Duration
+	HTTPPort              string
+	InTimeBaseURL         string
+	GroupID               string
+	Timezone              string
+	HTTPTimeout           time.Duration
+	GoogleCredentialsFile string
+	GoogleCalendarID      string
+	SQLiteFile            string
 }
 
 func Load() (Config, error) {
@@ -25,11 +28,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPPort:      getEnv("HTTP_PORT", "8080"),
-		InTimeBaseURL: getEnv("INTIME_BASE_URL", "https://intime.tsu.ru/api/web/v1"),
-		GroupID:       getEnv("GROUP_ID", ""),
-		Timezone:      getEnv("TIMEZONE", "Asia/Tomsk"),
-		HTTPTimeout:   timeout,
+		HTTPPort:              getEnv("HTTP_PORT", "8080"),
+		InTimeBaseURL:         getEnv("INTIME_BASE_URL", "https://intime.tsu.ru/api/web/v1"),
+		GroupID:               getEnv("GROUP_ID", ""),
+		Timezone:              getEnv("TIMEZONE", "Asia/Tomsk"),
+		HTTPTimeout:           timeout,
+		GoogleCredentialsFile: getEnv("GOOGLE_CREDENTIALS_FILE", "google-service-account.json"),
+		GoogleCalendarID:      getEnv("GOOGLE_CALENDAR_ID", ""),
+		SQLiteFile:            getEnv("SQLITE_FILE", "schedule.db"),
 	}
 
 	if cfg.GroupID == "" {

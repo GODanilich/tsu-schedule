@@ -134,10 +134,12 @@ func timeFromSeconds(date time.Time, seconds int64, location *time.Location) tim
 	minutes := (seconds % 3600) / 60
 	seconds %= 60
 
-	return time.Date(
+	utc := time.Date(
 		date.Year(), date.Month(), date.Day(),
-		int(hours), int(minutes), int(seconds), 0, location,
+		int(hours), int(minutes), int(seconds), 0, time.UTC,
 	)
+
+	return utc.In(location)
 }
 
 func professorName(professor *apiProfessor) string {

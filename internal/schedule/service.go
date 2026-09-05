@@ -24,6 +24,11 @@ type Repository interface {
 	Get(ctx context.Context, groupID string, from, to time.Time) ([]Day, error)
 }
 
+type CacheRepository interface {
+	Repository
+	Replace(ctx context.Context, groupID string, days []Day) error
+}
+
 type Service struct {
 	repository Repository
 	location   *time.Location
@@ -31,6 +36,27 @@ type Service struct {
 
 func NewService(repository Repository, location *time.Location) *Service {
 	return &Service{repository: repository, location: location}
+}
+
+type Refresher struct {
+	source   *Service
+	cache    CacheRepository
+	location *time.Location
+}
+
+func NewRefresher(source *Service, cache CacheRepository, location *time.Location) *Refresher {
+	return &Refresher{source: source, cache: cache, location: location}
+}
+
+func (r *Refresher) RefreshWeek(ctx context.Context, groupID string, date time.Time) ([]Day, error) {
+	days, err := r.source.GetWeek(ctx, groupID, date.In(r.location))
+	if err != nil {
+		return nil, err
+	}
+	if err := r.cache.Replace(ctx, groupID, days); err != nil {
+		return nil, err
+	}
+	return days, nil
 }
 
 func (s *Service) GetToday(ctx context.Context, groupID string) (Day, error) {

@@ -31,7 +31,31 @@ INTIME_BASE_URL=https://intime.tsu.ru/api/web/v1
 GROUP_ID=4d9906f9-2f03-11ef-815e-005056bc52bb
 TIMEZONE=Asia/Tomsk
 HTTP_TIMEOUT=10s
+GOOGLE_CREDENTIALS_FILE=google-service-account.json
+GOOGLE_CALENDAR_ID=calendar-id@group.calendar.google.com
+SQLITE_FILE=schedule.db
 ```
+
+HTTP API получает расписание напрямую из InTime. SQLite-файл `schedule.db` используется только как кэш для синхронизации с Google Calendar: при запуске приложение загружает в него текущую неделю и обновляет её каждый час.
+
+## Google Calendar
+
+Синхронизация выполняется от имени service account. Приложение создает или обновляет события пар, не дублирует их при повторном запуске и удаляет устаревшие события, которые были созданы им ранее.
+
+### Подключение отдельного календаря
+
+1. В [Google Calendar](https://calendar.google.com/) создайте календарь, например `Расписание ТГУ`, и скопируйте его ID из раздела **Интеграция с календарем**.
+2. В [Google Cloud Console](https://console.cloud.google.com/) создайте проект и включите **Google Calendar API**.
+3. В разделе **IAM и администрирование** → **Сервисные аккаунты** создайте service account и скачайте для него JSON-ключ в корень проекта под именем `google-service-account.json`.
+4. В настройках календаря, в разделе **Общий доступ для отдельных пользователей**, добавьте email service account и выдайте разрешение **Вносить изменения в мероприятия**.
+5. Укажите ID календаря в `.env` и запустите сервер. Google Calendar берет расписание из SQLite-кэша:
+
+    ```bash
+    go run ./cmd/server
+    curl -X POST "http://localhost:8080/calendar/sync?date=2026-09-03"
+    ```
+
+Параметр `date` необязателен: без него синхронизируется текущая неделя. Не добавляйте JSON-ключ service account в Git.
 
 ## API
 
@@ -61,6 +85,30 @@ curl "http://localhost:8080/schedule/day?date=2026-09-03"
 curl "http://localhost:8080/schedule/week?date=2026-09-03"
 ```
 
+### Ручное обновление SQLite-кэша
+
+```bash
+curl -X PUT "http://localhost:8080/schedule/cache?date=2026-09-03"
+```
+
+`date` необязателен. Приложение загрузит из InTime неделю, содержащую указанную дату, и атомарно заменит ее в SQLite. Ответ содержит начало недели и число сохраненных пар.
+
+### Синхронизация с Google Calendar
+
+```bash
+curl -X POST "http://localhost:8080/calendar/sync?date=2026-09-03"
+```
+
+Ответ содержит начало недели и количество добавленных или обновленных пар.
+
+### Очистка Google Calendar
+
+```bash
+curl -X DELETE "http://localhost:8080/calendar/"
+```
+
+Эта операция необратимо удаляет **все** события из календаря, указанного в `GOOGLE_CALENDAR_ID`, включая созданные вручную.
+
 ## Архитектура
 
 ```text
@@ -71,6 +119,10 @@ Schedule service
 InTime client
     ↓
 InTime API
+
+Calendar sync handler
+    ↓
+SQLite schedule cache + Google Calendar API
 ```
 
 InTime-specific JSON модели находятся только в `internal/intime`.
@@ -79,9 +131,6 @@ InTime-specific JSON модели находятся только в `internal/i
 
 ## Важное замечание о времени
 
-Исходный Python-код вручную прибавляет 7 часов к `starts`/`ends`.
-В этом проекте предполагается, что `starts` и `ends` — секунды от начала
-локального дня. Поэтому дополнительный `+7` не применяется.
-
-Если фактический ответ InTime использует другой формат времени, функцию
-`timeFromSeconds` в `internal/intime/client.go` нужно адаптировать.
+InTime передает `starts` и `ends` как секунды от начала дня в UTC. Клиент
+переводит их в часовую зону из `TIMEZONE`, поэтому занятия отображаются в
+томском времени без ручного смещения в настройках.
