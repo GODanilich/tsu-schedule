@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/GODanilich/tsu-schedule/internal/config"
+	"github.com/GODanilich/tsu-schedule/internal/handler"
 	"github.com/GODanilich/tsu-schedule/internal/intime"
 	"github.com/GODanilich/tsu-schedule/internal/schedule"
 )
@@ -21,4 +24,16 @@ func NewScheduleService(cfg config.Config) (*schedule.Service, error) {
 	intimeClient := intime.NewClient(cfg.InTimeBaseURL, httpClient, location)
 
 	return schedule.NewService(intimeClient, location), nil
+}
+
+// RegisterRoutes initializes the InTime parser and registers its schedule routes.
+func RegisterRoutes(router chi.Router, cfg config.Config) error {
+	scheduleService, err := NewScheduleService(cfg)
+	if err != nil {
+		return err
+	}
+
+	router.Mount("/schedule", handler.NewScheduleHandler(scheduleService, cfg.GroupID).Routes())
+
+	return nil
 }
