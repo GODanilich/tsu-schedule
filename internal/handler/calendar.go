@@ -31,6 +31,7 @@ func (h *CalendarHandler) Routes() chi.Router {
 	r.Get("/events/{id}", h.getEvent)
 	r.Put("/events/{id}", h.updateEvent)
 	r.Delete("/events/{id}", h.deleteEvent)
+	r.Delete("/events", h.clear)
 	r.Delete("/", h.clear)
 	return r
 }
