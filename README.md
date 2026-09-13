@@ -36,7 +36,7 @@ GOOGLE_CALENDAR_ID=calendar-id@group.calendar.google.com
 SQLITE_FILE=schedule.db
 ```
 
-HTTP API получает расписание из InTime с применением blacklist. SQLite-файл `schedule.db` хранит исходное расписание и правила blacklist: при запуске приложение в фоне загружает текущую неделю и четыре следующие, по одной неделе, а затем повторяет проверку каждый час. Прогресс фоновой загрузки пишется в лог каждые 10 процентов. Исходные пары не удаляются из кэша blacklist-фильтром, поэтому их можно восстановить после удаления правила.
+HTTP API получает расписание из InTime с применением blacklist. SQLite-файл `schedule.db` хранит исходное расписание и правила blacklist: при запуске приложение в фоне загружает текущую неделю и четыре следующие, по одной неделе, а затем повторяет проверку каждый час. После каждой успешно загруженной недели приложение пишет лог `schedule week loaded` с номером и датой начала недели. Исходные пары не удаляются из кэша blacklist-фильтром, поэтому их можно восстановить после удаления правила.
 
 ## Blacklist пар
 
@@ -133,6 +133,24 @@ curl -X POST "http://localhost:8080/calendar/sync?date=2026-09-03"
 ```
 
 Ответ содержит начало недели и количество добавленных или обновленных пар.
+
+### CRUD ручных событий
+
+Ручные события создаются отдельно от событий расписания и не удаляются автоматической синхронизацией. Поля `start` и `end` передаются в RFC3339.
+
+```bash
+curl -X POST http://localhost:8080/calendar/events \
+    -H 'Content-Type: application/json' \
+    -d '{"summary":"Встреча","description":"Обсуждение проекта","location":"Аудитория 101","start":"2026-09-07T15:00:00+07:00","end":"2026-09-07T16:00:00+07:00"}'
+
+curl http://localhost:8080/calendar/events/EVENT_ID
+
+curl -X PUT http://localhost:8080/calendar/events/EVENT_ID \
+    -H 'Content-Type: application/json' \
+    -d '{"summary":"Встреча перенесена","start":"2026-09-07T16:00:00+07:00","end":"2026-09-07T17:00:00+07:00"}'
+
+curl -X DELETE http://localhost:8080/calendar/events/EVENT_ID
+```
 
 ### Очистка Google Calendar
 

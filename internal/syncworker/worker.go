@@ -44,18 +44,14 @@ func (w *Worker) Run(ctx context.Context) {
 		weekCtx, cancel := context.WithTimeout(ctx, w.timeout)
 		days, err := w.source.GetWeek(weekCtx, w.groupID, date)
 		cancel()
-		progress := week*20 + 10
 		if err != nil {
 			slog.Error("load schedule week", "week", week+1, "error", err)
-			slog.Info("schedule cache progress", "progress_percent", progress)
 			continue
 		}
-		slog.Info("schedule cache progress", "progress_percent", progress)
 
 		changes, err := w.cache.ApplyWeek(ctx, w.groupID, days)
 		if err != nil {
 			slog.Error("apply schedule week", "week", week+1, "error", err)
-			slog.Info("schedule cache progress", "progress_percent", (week+1)*20)
 			continue
 		}
 		if initial {
@@ -63,7 +59,7 @@ func (w *Worker) Run(ctx context.Context) {
 		} else {
 			w.syncCalendar(ctx, changes)
 		}
-		slog.Info("schedule cache progress", "progress_percent", (week+1)*20, "changed_lessons", len(changes))
+		slog.Info("schedule week loaded", "week", week+1, "week_start", date.Format("2006-01-02"), "changed_lessons", len(changes))
 	}
 	w.initial = false
 }

@@ -22,10 +22,10 @@ type Day struct {
 }
 
 type BlacklistRule struct {
-	ID     int64  `json:"id"`
+	ID      int64  `json:"id"`
 	Subject string `json:"subject,omitempty"`
-	Date   string `json:"date,omitempty"`
-	Number int    `json:"number,omitempty"`
+	Date    string `json:"date,omitempty"`
+	Number  int    `json:"number,omitempty"`
 }
 
 type BlacklistRepository interface {

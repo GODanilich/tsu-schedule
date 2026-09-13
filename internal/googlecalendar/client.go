@@ -24,6 +24,15 @@ type Client struct {
 	timezone   string
 }
 
+type Event struct {
+	ID          string    `json:"id,omitempty"`
+	Summary     string    `json:"summary"`
+	Description string    `json:"description,omitempty"`
+	Location    string    `json:"location,omitempty"`
+	Start       time.Time `json:"start"`
+	End         time.Time `json:"end"`
+}
+
 type existingEvents struct {
 	byKey  map[string]string
 	legacy []string
@@ -155,6 +164,56 @@ func (c *Client) Clear(ctx context.Context) (int, error) {
 	}
 
 	return len(eventIDs), nil
+}
+
+func (c *Client) CreateEvent(ctx context.Context, event Event) (Event, error) {
+	created, err := c.service.Events.Insert(c.calendarID, c.eventFrom(event)).Context(ctx).Do()
+	if err != nil {
+		return Event{}, fmt.Errorf("create calendar event: %w", err)
+	}
+	return c.eventTo(created), nil
+}
+
+func (c *Client) GetEvent(ctx context.Context, id string) (Event, error) {
+	event, err := c.service.Events.Get(c.calendarID, id).Context(ctx).Do()
+	if err != nil {
+		return Event{}, fmt.Errorf("get calendar event: %w", err)
+	}
+	return c.eventTo(event), nil
+}
+
+func (c *Client) UpdateEvent(ctx context.Context, id string, event Event) (Event, error) {
+	updated, err := c.service.Events.Update(c.calendarID, id, c.eventFrom(event)).Context(ctx).Do()
+	if err != nil {
+		return Event{}, fmt.Errorf("update calendar event: %w", err)
+	}
+	return c.eventTo(updated), nil
+}
+
+func (c *Client) DeleteEvent(ctx context.Context, id string) error {
+	if err := c.service.Events.Delete(c.calendarID, id).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("delete calendar event: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) eventFrom(event Event) *calendar.Event {
+	return &calendar.Event{
+		Summary: event.Summary, Description: event.Description, Location: event.Location,
+		Start: &calendar.EventDateTime{DateTime: event.Start.Format(time.RFC3339), TimeZone: c.timezone},
+		End:   &calendar.EventDateTime{DateTime: event.End.Format(time.RFC3339), TimeZone: c.timezone},
+	}
+}
+
+func (c *Client) eventTo(event *calendar.Event) Event {
+	result := Event{ID: event.Id, Summary: event.Summary, Description: event.Description, Location: event.Location}
+	if event.Start != nil {
+		result.Start, _ = time.Parse(time.RFC3339, event.Start.DateTime)
+	}
+	if event.End != nil {
+		result.End, _ = time.Parse(time.RFC3339, event.End.DateTime)
+	}
+	return result
 }
 
 func (c *Client) eventFor(lesson schedule.Lesson) *calendar.Event {
