@@ -68,6 +68,8 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 	}
 
 	desired := make(map[string]*calendar.Event)
+	location := c.calendarLocation()
+	currentWeekStart := startOfWeek(time.Now().In(location))
 	for _, eventID := range existing.legacy {
 		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
 			return 0, fmt.Errorf("delete legacy lesson event: %w", err)
@@ -75,6 +77,9 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 	}
 
 	for _, day := range days {
+		if day.Date.Before(currentWeekStart) {
+			continue
+		}
 		for _, lesson := range day.Lessons {
 			event := c.eventFor(lesson)
 			desired[eventKey(lesson)] = event
@@ -258,6 +263,17 @@ func (c *Client) eventsCreatedByApp(ctx context.Context, days []schedule.Day) (e
 			to = day.Date
 		}
 	}
+	// Automatic reconciliation must never touch events from completed weeks.
+	// The worker starts at the current week, but this also protects manual syncs
+	// and future changes to the worker's date range.
+	location := c.calendarLocation()
+	currentWeekStart := startOfWeek(time.Now().In(location))
+	if from.Before(currentWeekStart) {
+		from = currentWeekStart
+	}
+	if !from.Before(to.AddDate(0, 0, 1)) {
+		return existing, nil
+	}
 
 	call := c.service.Events.List(c.calendarID).
 		TimeMin(from.Format(time.RFC3339)).
@@ -289,6 +305,20 @@ func (c *Client) eventsCreatedByApp(ctx context.Context, days []schedule.Day) (e
 		}
 		call.PageToken(response.NextPageToken)
 	}
+}
+
+func (c *Client) calendarLocation() *time.Location {
+	location, err := time.LoadLocation(c.timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return location
+}
+
+func startOfWeek(value time.Time) time.Time {
+	value = time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+	daysFromMonday := (int(value.Weekday()) + 6) % 7
+	return value.AddDate(0, 0, -daysFromMonday)
 }
 
 func (c *Client) eventIDs(ctx context.Context) ([]string, error) {

@@ -1,5 +1,7 @@
 # TSU Schedule
 
+[![CI](https://github.com/GODanilich/tsu-schedule/actions/workflows/ci.yml/badge.svg)](https://github.com/GODanilich/tsu-schedule/actions/workflows/ci.yml)
+
 MVP REST API для получения расписания группы ТГУ через InTime.
 
 ## Требования
@@ -74,6 +76,8 @@ curl -X POST "http://localhost:8080/calendar/sync?date=2026-09-07"
 ## Google Calendar
 
 Синхронизация выполняется от имени service account. Приложение создает или обновляет события пар, не дублирует их при повторном запуске и удаляет устаревшие события, которые были созданы им ранее.
+События, относящиеся к неделям до текущей, при автоматическом запуске не проверяются
+и не удаляются.
 
 ### Подключение отдельного календаря
 
@@ -150,6 +154,9 @@ curl -X PUT http://localhost:8080/calendar/events/EVENT_ID \
     -d '{"summary":"Встреча перенесена","start":"2026-09-07T16:00:00+07:00","end":"2026-09-07T17:00:00+07:00"}'
 
 curl -X DELETE http://localhost:8080/calendar/events/EVENT_ID
+
+# удалить все события, включая ручные и события расписания
+curl -X DELETE http://localhost:8080/calendar/events
 ```
 
 ### Очистка Google Calendar
