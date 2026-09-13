@@ -98,6 +98,49 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 	return synced, nil
 }
 
+// SyncLesson creates or updates exactly one lesson event.
+func (c *Client) SyncLesson(ctx context.Context, lesson schedule.Lesson) error {
+	existing, err := c.eventsCreatedByApp(ctx, []schedule.Day{{Date: lesson.Start, Lessons: []schedule.Lesson{lesson}}})
+	if err != nil {
+		return err
+	}
+	for _, eventID := range existing.legacy {
+		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+			return fmt.Errorf("delete legacy lesson event: %w", err)
+		}
+	}
+
+	key := eventKey(lesson)
+	event := c.eventFor(lesson)
+	if eventID, ok := existing.byKey[key]; ok {
+		event.Id = eventID
+		if _, err := c.service.Events.Update(c.calendarID, eventID, event).Context(ctx).Do(); err != nil {
+			return fmt.Errorf("update lesson %q: %w", lesson.Title, err)
+		}
+		return nil
+	}
+	if _, err := c.service.Events.Insert(c.calendarID, event).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("create lesson %q: %w", lesson.Title, err)
+	}
+	return nil
+}
+
+// DeleteLesson removes only the event corresponding to the given lesson.
+func (c *Client) DeleteLesson(ctx context.Context, lesson schedule.Lesson) error {
+	existing, err := c.eventsCreatedByApp(ctx, []schedule.Day{{Date: lesson.Start, Lessons: []schedule.Lesson{lesson}}})
+	if err != nil {
+		return err
+	}
+	eventID, ok := existing.byKey[eventKey(lesson)]
+	if !ok {
+		return nil
+	}
+	if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("delete lesson %q: %w", lesson.Title, err)
+	}
+	return nil
+}
+
 // Clear removes every event from the configured calendar.
 func (c *Client) Clear(ctx context.Context) (int, error) {
 	eventIDs, err := c.eventIDs(ctx)
@@ -132,6 +175,9 @@ func (c *Client) eventFor(lesson schedule.Lesson) *calendar.Event {
 }
 
 func eventKey(lesson schedule.Lesson) string {
+	if lesson.ID != "" {
+		return lesson.ID
+	}
 	value := lesson.Start.Format("2006-01-02") + "\x00" + fmt.Sprint(lesson.Number) + "\x00" + lesson.Title + "\x00" + lesson.Professor + "\x00" + lesson.Audience
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])

@@ -6,6 +6,7 @@ import (
 )
 
 type Lesson struct {
+	ID        string    `json:"-"`
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
 	Type      string    `json:"type"`
@@ -27,6 +28,16 @@ type Repository interface {
 type CacheRepository interface {
 	Repository
 	Replace(ctx context.Context, groupID string, days []Day) error
+}
+
+type LessonChange struct {
+	Before *Lesson
+	After  *Lesson
+}
+
+type DiffCacheRepository interface {
+	CacheRepository
+	ApplyWeek(ctx context.Context, groupID string, days []Day) ([]LessonChange, error)
 }
 
 type Service struct {
