@@ -42,6 +42,7 @@ func New(cfg config.Config) (http.Handler, error) {
 		return nil, fmt.Errorf("create schedule cache: %w", err)
 	}
 	cachedService := schedule.NewService(cache, location)
+	cachedService.SetBlacklist(cache)
 	refresher := schedule.NewRefresher(sourceService, cache, location)
 
 	router.Mount("/schedule", handler.NewScheduleHandler(sourceService, cfg.GroupID, refresher).Routes())
@@ -64,7 +65,13 @@ func New(cfg config.Config) (http.Handler, error) {
 	} else {
 		calendar = calendarClient
 	}
+	var blacklistCalendar handler.CalendarSyncer
+	if calendarErr == nil {
+		blacklistCalendar = calendarClient
+	}
+	router.Mount("/blacklist", handler.NewBlacklistHandler(cache, cachedService, blacklistCalendar, cfg.GroupID).Routes())
 	worker := syncworker.New(sourceService, cache, calendar, cfg.GroupID, location, cfg.HTTPTimeout)
+	worker.SetCalendarService(cachedService)
 	go func() {
 		worker.Run(context.Background())
 		ticker := time.NewTicker(time.Hour)

@@ -32,3 +32,9 @@ func TestEventKeyKeepsIdentityWhenLessonTimeChanges(t *testing.T) {
 		t.Fatal("event is not marked as created by tsu-schedule")
 	}
 }
+
+func TestSourcePropertyMatchesEventMetadata(t *testing.T) {
+	if sourceProperty != "source=tsu-schedule" {
+		t.Fatalf("unexpected Google Calendar property filter: %q", sourceProperty)
+	}
+}

@@ -39,6 +39,16 @@ func New(path string) (*Repository, error) {
 			PRIMARY KEY (group_id, day_date, number, start_time)
 		);
 		CREATE INDEX IF NOT EXISTS lessons_range_idx ON lessons (group_id, start_time);
+		CREATE TABLE IF NOT EXISTS blacklist_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			group_id TEXT NOT NULL,
+			subject TEXT NOT NULL DEFAULT '',
+			day_date TEXT NOT NULL DEFAULT '',
+			lesson_number INTEGER NOT NULL DEFAULT 0,
+			CHECK ((subject != '' AND day_date = '' AND lesson_number = 0) OR
+			       (subject = '' AND day_date != '' AND lesson_number > 0)),
+			UNIQUE (group_id, subject, day_date, lesson_number)
+		);
 	`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize SQLite database: %w", err)
@@ -52,6 +62,70 @@ func New(path string) (*Repository, error) {
 		return nil, fmt.Errorf("create SQLite source ID index: %w", err)
 	}
 	return &Repository{db: db}, nil
+}
+
+func (r *Repository) ListBlacklist(ctx context.Context, groupID string) ([]schedule.BlacklistRule, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, subject, day_date, lesson_number FROM blacklist_rules WHERE group_id = ? ORDER BY id`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("query SQLite blacklist: %w", err)
+	}
+	defer rows.Close()
+	var rules []schedule.BlacklistRule
+	for rows.Next() {
+		var rule schedule.BlacklistRule
+		if err := rows.Scan(&rule.ID, &rule.Subject, &rule.Date, &rule.Number); err != nil {
+			return nil, fmt.Errorf("scan SQLite blacklist: %w", err)
+		}
+		rules = append(rules, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate SQLite blacklist: %w", err)
+	}
+	return rules, nil
+}
+
+func (r *Repository) AddBlacklist(ctx context.Context, groupID string, rule schedule.BlacklistRule) (schedule.BlacklistRule, error) {
+	if rule.Subject == "" && (rule.Date == "" || rule.Number <= 0) {
+		return schedule.BlacklistRule{}, fmt.Errorf("blacklist rule must contain subject or date and positive number")
+	}
+	if rule.Subject != "" && (rule.Date != "" || rule.Number != 0) {
+		return schedule.BlacklistRule{}, fmt.Errorf("subject rule cannot contain date or number")
+	}
+	if rule.Date != "" {
+		if _, err := time.Parse("2006-01-02", rule.Date); err != nil {
+			return schedule.BlacklistRule{}, fmt.Errorf("blacklist date must have format YYYY-MM-DD")
+		}
+	}
+	insertResult, err := r.db.ExecContext(ctx, `INSERT INTO blacklist_rules (group_id, subject, day_date, lesson_number) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, groupID, rule.Subject, rule.Date, rule.Number)
+	if err != nil {
+		return schedule.BlacklistRule{}, fmt.Errorf("insert SQLite blacklist rule: %w", err)
+	}
+	insertedID, _ := insertResult.LastInsertId()
+	if insertedID != 0 {
+		rule.ID = insertedID
+		return rule, nil
+	}
+	rows, err := r.ListBlacklist(ctx, groupID)
+	if err != nil {
+		return schedule.BlacklistRule{}, err
+	}
+	for _, existing := range rows {
+		if existing.Subject == rule.Subject && existing.Date == rule.Date && existing.Number == rule.Number {
+			return existing, nil
+		}
+	}
+	return schedule.BlacklistRule{}, fmt.Errorf("blacklist rule was not saved")
+}
+
+func (r *Repository) DeleteBlacklist(ctx context.Context, groupID string, id int64) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM blacklist_rules WHERE group_id = ? AND id = ?`, groupID, id)
+	if err != nil {
+		return fmt.Errorf("delete SQLite blacklist rule: %w", err)
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return fmt.Errorf("blacklist rule %d not found", id)
+	}
+	return nil
 }
 
 func ensureSourceIDColumn(db *sql.DB) error {

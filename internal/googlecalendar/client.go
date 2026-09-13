@@ -16,7 +16,7 @@ import (
 )
 
 const calendarScope = "https://www.googleapis.com/auth/calendar.events"
-const sourceProperty = "tsu-schedule=true"
+const sourceProperty = "source=tsu-schedule"
 
 type Client struct {
 	service    *calendar.Service
@@ -217,6 +217,9 @@ func (c *Client) eventsCreatedByApp(ctx context.Context, days []schedule.Day) (e
 			}
 			key := event.ExtendedProperties.Private["lesson_key"]
 			if key != "" {
+				if previousID, exists := existing.byKey[key]; exists {
+					existing.legacy = append(existing.legacy, previousID)
+				}
 				existing.byKey[key] = event.Id
 				continue
 			}

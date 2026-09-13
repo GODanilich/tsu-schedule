@@ -21,6 +21,17 @@ type Day struct {
 	Lessons []Lesson  `json:"lessons"`
 }
 
+type BlacklistRule struct {
+	ID     int64  `json:"id"`
+	Subject string `json:"subject,omitempty"`
+	Date   string `json:"date,omitempty"`
+	Number int    `json:"number,omitempty"`
+}
+
+type BlacklistRepository interface {
+	ListBlacklist(ctx context.Context, groupID string) ([]BlacklistRule, error)
+}
+
 type Repository interface {
 	Get(ctx context.Context, groupID string, from, to time.Time) ([]Day, error)
 }
@@ -43,10 +54,19 @@ type DiffCacheRepository interface {
 type Service struct {
 	repository Repository
 	location   *time.Location
+	blacklist  BlacklistRepository
 }
 
 func NewService(repository Repository, location *time.Location) *Service {
 	return &Service{repository: repository, location: location}
+}
+
+func (s *Service) SetBlacklist(repository BlacklistRepository) {
+	s.blacklist = repository
+}
+
+func (s *Service) FilterDays(ctx context.Context, groupID string, days []Day) ([]Day, error) {
+	return s.filterDays(ctx, groupID, days)
 }
 
 type Refresher struct {
@@ -86,7 +106,11 @@ func (s *Service) GetDay(ctx context.Context, groupID string, date time.Time) (D
 	if len(days) == 0 {
 		return Day{Date: start, Lessons: []Lesson{}}, nil
 	}
-	return days[0], nil
+	filtered, err := s.filterDays(ctx, groupID, days)
+	if err != nil {
+		return Day{}, err
+	}
+	return filtered[0], nil
 }
 
 func (s *Service) GetWeek(ctx context.Context, groupID string, date time.Time) ([]Day, error) {
@@ -116,7 +140,38 @@ func (s *Service) GetWeek(ctx context.Context, groupID string, date time.Time) (
 		result = append(result, Day{Date: current, Lessons: []Lesson{}})
 	}
 
-	return result, nil
+	return s.filterDays(ctx, groupID, result)
+}
+
+func (s *Service) filterDays(ctx context.Context, groupID string, days []Day) ([]Day, error) {
+	if s.blacklist == nil {
+		return days, nil
+	}
+	rules, err := s.blacklist.ListBlacklist(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]Day, len(days))
+	for index, day := range days {
+		filtered[index] = Day{Date: day.Date, Lessons: make([]Lesson, 0, len(day.Lessons))}
+		for _, lesson := range day.Lessons {
+			blocked := false
+			for _, rule := range rules {
+				if rule.Subject != "" && lesson.Title == rule.Subject {
+					blocked = true
+					break
+				}
+				if rule.Date == day.Date.Format("2006-01-02") && rule.Number == lesson.Number {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				filtered[index].Lessons = append(filtered[index].Lessons, lesson)
+			}
+		}
+	}
+	return filtered, nil
 }
 
 func startOfDay(t time.Time) time.Time {
