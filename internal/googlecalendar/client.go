@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
+	"math/rand"
 	"os"
 	"time"
 
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/GODanilich/tsu-schedule/internal/schedule"
@@ -17,6 +21,12 @@ import (
 
 const calendarScope = "https://www.googleapis.com/auth/calendar.events"
 const sourceProperty = "source=tsu-schedule"
+
+const (
+	maxGoogleAPIRetries = 5
+	googleRetryBase     = 200 * time.Millisecond
+	googleRetryMax      = 5 * time.Second
+)
 
 type Client struct {
 	service    *calendar.Service
@@ -71,7 +81,9 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 	location := c.calendarLocation()
 	currentWeekStart := startOfWeek(time.Now().In(location))
 	for _, eventID := range existing.legacy {
-		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+		if err := retryGoogleAPI(ctx, func() error {
+			return c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do()
+		}); err != nil {
 			return 0, fmt.Errorf("delete legacy lesson event: %w", err)
 		}
 	}
@@ -91,9 +103,15 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 		var err error
 		if eventID, ok := existing.byKey[key]; ok {
 			event.Id = eventID
-			_, err = c.service.Events.Update(c.calendarID, eventID, event).Context(ctx).Do()
+			err = retryGoogleAPI(ctx, func() error {
+				_, err := c.service.Events.Update(c.calendarID, eventID, event).Context(ctx).Do()
+				return err
+			})
 		} else {
-			_, err = c.service.Events.Insert(c.calendarID, event).Context(ctx).Do()
+			err = retryGoogleAPI(ctx, func() error {
+				_, err := c.service.Events.Insert(c.calendarID, event).Context(ctx).Do()
+				return err
+			})
 		}
 		if err != nil {
 			return synced, fmt.Errorf("sync lesson %q: %w", event.Summary, err)
@@ -105,7 +123,9 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 		if _, ok := desired[key]; ok {
 			continue
 		}
-		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+		if err := retryGoogleAPI(ctx, func() error {
+			return c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do()
+		}); err != nil {
 			return synced, fmt.Errorf("delete outdated lesson event: %w", err)
 		}
 	}
@@ -119,7 +139,9 @@ func (c *Client) SyncLesson(ctx context.Context, lesson schedule.Lesson) error {
 		return err
 	}
 	for _, eventID := range existing.legacy {
-		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+		if err := retryGoogleAPI(ctx, func() error {
+			return c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do()
+		}); err != nil {
 			return fmt.Errorf("delete legacy lesson event: %w", err)
 		}
 	}
@@ -128,12 +150,18 @@ func (c *Client) SyncLesson(ctx context.Context, lesson schedule.Lesson) error {
 	event := c.eventFor(lesson)
 	if eventID, ok := existing.byKey[key]; ok {
 		event.Id = eventID
-		if _, err := c.service.Events.Update(c.calendarID, eventID, event).Context(ctx).Do(); err != nil {
+		if err := retryGoogleAPI(ctx, func() error {
+			_, err := c.service.Events.Update(c.calendarID, eventID, event).Context(ctx).Do()
+			return err
+		}); err != nil {
 			return fmt.Errorf("update lesson %q: %w", lesson.Title, err)
 		}
 		return nil
 	}
-	if _, err := c.service.Events.Insert(c.calendarID, event).Context(ctx).Do(); err != nil {
+	if err := retryGoogleAPI(ctx, func() error {
+		_, err := c.service.Events.Insert(c.calendarID, event).Context(ctx).Do()
+		return err
+	}); err != nil {
 		return fmt.Errorf("create lesson %q: %w", lesson.Title, err)
 	}
 	return nil
@@ -149,7 +177,9 @@ func (c *Client) DeleteLesson(ctx context.Context, lesson schedule.Lesson) error
 	if !ok {
 		return nil
 	}
-	if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+	if err := retryGoogleAPI(ctx, func() error {
+		return c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do()
+	}); err != nil {
 		return fmt.Errorf("delete lesson %q: %w", lesson.Title, err)
 	}
 	return nil
@@ -163,7 +193,9 @@ func (c *Client) Clear(ctx context.Context) (int, error) {
 	}
 
 	for _, eventID := range eventIDs {
-		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+		if err := retryGoogleAPI(ctx, func() error {
+			return c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do()
+		}); err != nil {
 			return 0, fmt.Errorf("delete calendar event: %w", err)
 		}
 	}
@@ -172,7 +204,12 @@ func (c *Client) Clear(ctx context.Context) (int, error) {
 }
 
 func (c *Client) CreateEvent(ctx context.Context, event Event) (Event, error) {
-	created, err := c.service.Events.Insert(c.calendarID, c.eventFrom(event)).Context(ctx).Do()
+	var created *calendar.Event
+	err := retryGoogleAPI(ctx, func() error {
+		var err error
+		created, err = c.service.Events.Insert(c.calendarID, c.eventFrom(event)).Context(ctx).Do()
+		return err
+	})
 	if err != nil {
 		return Event{}, fmt.Errorf("create calendar event: %w", err)
 	}
@@ -180,7 +217,12 @@ func (c *Client) CreateEvent(ctx context.Context, event Event) (Event, error) {
 }
 
 func (c *Client) GetEvent(ctx context.Context, id string) (Event, error) {
-	event, err := c.service.Events.Get(c.calendarID, id).Context(ctx).Do()
+	var event *calendar.Event
+	err := retryGoogleAPI(ctx, func() error {
+		var err error
+		event, err = c.service.Events.Get(c.calendarID, id).Context(ctx).Do()
+		return err
+	})
 	if err != nil {
 		return Event{}, fmt.Errorf("get calendar event: %w", err)
 	}
@@ -188,7 +230,12 @@ func (c *Client) GetEvent(ctx context.Context, id string) (Event, error) {
 }
 
 func (c *Client) UpdateEvent(ctx context.Context, id string, event Event) (Event, error) {
-	updated, err := c.service.Events.Update(c.calendarID, id, c.eventFrom(event)).Context(ctx).Do()
+	var updated *calendar.Event
+	err := retryGoogleAPI(ctx, func() error {
+		var err error
+		updated, err = c.service.Events.Update(c.calendarID, id, c.eventFrom(event)).Context(ctx).Do()
+		return err
+	})
 	if err != nil {
 		return Event{}, fmt.Errorf("update calendar event: %w", err)
 	}
@@ -196,7 +243,9 @@ func (c *Client) UpdateEvent(ctx context.Context, id string, event Event) (Event
 }
 
 func (c *Client) DeleteEvent(ctx context.Context, id string) error {
-	if err := c.service.Events.Delete(c.calendarID, id).Context(ctx).Do(); err != nil {
+	if err := retryGoogleAPI(ctx, func() error {
+		return c.service.Events.Delete(c.calendarID, id).Context(ctx).Do()
+	}); err != nil {
 		return fmt.Errorf("delete calendar event: %w", err)
 	}
 	return nil
@@ -282,7 +331,12 @@ func (c *Client) eventsCreatedByApp(ctx context.Context, days []schedule.Day) (e
 		SingleEvents(true).
 		ShowDeleted(false)
 	for {
-		response, err := call.Context(ctx).Do()
+		var response *calendar.Events
+		err := retryGoogleAPI(ctx, func() error {
+			var err error
+			response, err = call.Context(ctx).Do()
+			return err
+		})
 		if err != nil {
 			return existingEvents{}, fmt.Errorf("list Google Calendar events: %w", err)
 		}
@@ -321,11 +375,61 @@ func startOfWeek(value time.Time) time.Time {
 	return value.AddDate(0, 0, -daysFromMonday)
 }
 
+func retryGoogleAPI(ctx context.Context, operation func() error) error {
+	for attempt := 0; ; attempt++ {
+		err := operation()
+		if err == nil || !isRetryableGoogleError(err) || attempt >= maxGoogleAPIRetries {
+			return err
+		}
+
+		backoff := googleRetryBase << attempt
+		if backoff > googleRetryMax {
+			backoff = googleRetryMax
+		}
+		// Full jitter avoids synchronized retries when several requests hit the limit together.
+		wait := time.Duration(rand.Int63n(int64(backoff) + 1))
+		slog.Warn("Google Calendar API request throttled; retrying", "attempt", attempt+1, "wait", wait, "error", err)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func isRetryableGoogleError(err error) bool {
+	var apiError *googleapi.Error
+	if !errors.As(err, &apiError) {
+		return false
+	}
+	if apiError.Code == 429 || apiError.Code >= 500 {
+		return true
+	}
+	if apiError.Code != 403 {
+		return false
+	}
+	for _, reason := range apiError.Errors {
+		if reason.Reason == "rateLimitExceeded" || reason.Reason == "userRateLimitExceeded" || reason.Reason == "backendError" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) eventIDs(ctx context.Context) ([]string, error) {
 	var eventIDs []string
 	call := c.service.Events.List(c.calendarID).ShowDeleted(false)
 	for {
-		response, err := call.Context(ctx).Do()
+		var response *calendar.Events
+		err := retryGoogleAPI(ctx, func() error {
+			var err error
+			response, err = call.Context(ctx).Do()
+			return err
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list Google Calendar events: %w", err)
 		}
