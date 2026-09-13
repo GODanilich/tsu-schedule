@@ -16,6 +16,7 @@ import (
 	"github.com/GODanilich/tsu-schedule/internal/intimeparser"
 	"github.com/GODanilich/tsu-schedule/internal/schedule"
 	"github.com/GODanilich/tsu-schedule/internal/sqlite"
+	"github.com/GODanilich/tsu-schedule/internal/syncworker"
 )
 
 // New creates the HTTP router for the application.
@@ -41,25 +42,8 @@ func New(cfg config.Config) (http.Handler, error) {
 		return nil, fmt.Errorf("create schedule cache: %w", err)
 	}
 	cachedService := schedule.NewService(cache, location)
+	cachedService.SetBlacklist(cache)
 	refresher := schedule.NewRefresher(sourceService, cache, location)
-
-	refresh := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
-		defer cancel()
-		if _, err := refresher.RefreshWeek(ctx, cfg.GroupID, time.Now().In(location)); err != nil {
-			slog.Error("refresh schedule cache", "error", err)
-			return
-		}
-		slog.Info("schedule cache refreshed")
-	}
-	refresh()
-	go func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			refresh()
-		}
-	}()
 
 	router.Mount("/schedule", handler.NewScheduleHandler(sourceService, cfg.GroupID, refresher).Routes())
 
@@ -74,6 +58,28 @@ func New(cfg config.Config) (http.Handler, error) {
 		calendarClient,
 		calendarErr,
 	).Routes())
+
+	var calendar syncworker.Calendar
+	if calendarErr != nil {
+		slog.Warn("Google Calendar sync disabled", "error", calendarErr)
+	} else {
+		calendar = calendarClient
+	}
+	var blacklistCalendar handler.CalendarSyncer
+	if calendarErr == nil {
+		blacklistCalendar = calendarClient
+	}
+	router.Mount("/blacklist", handler.NewBlacklistHandler(cache, cachedService, blacklistCalendar, cfg.GroupID).Routes())
+	worker := syncworker.New(sourceService, cache, calendar, cfg.GroupID, location, cfg.HTTPTimeout)
+	worker.SetCalendarService(cachedService)
+	go func() {
+		worker.Run(context.Background())
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			worker.Run(context.Background())
+		}
+	}()
 
 	return router, nil
 }

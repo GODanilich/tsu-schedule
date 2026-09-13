@@ -31,6 +31,7 @@ type apiDay struct {
 }
 
 type apiLesson struct {
+	ID           string        `json:"id"`
 	Type         string        `json:"type"`
 	LessonNumber int           `json:"lessonNumber"`
 	Title        string        `json:"title"`
@@ -105,6 +106,7 @@ func (c *Client) convert(data apiResponse) ([]schedule.Day, error) {
 			}
 
 			resultDay.Lessons = append(resultDay.Lessons, schedule.Lesson{
+				ID:        lesson.ID,
 				Number:    lesson.LessonNumber,
 				Title:     lesson.Title,
 				Type:      lesson.LessonType,

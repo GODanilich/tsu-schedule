@@ -36,7 +36,40 @@ GOOGLE_CALENDAR_ID=calendar-id@group.calendar.google.com
 SQLITE_FILE=schedule.db
 ```
 
-HTTP API получает расписание напрямую из InTime. SQLite-файл `schedule.db` используется только как кэш для синхронизации с Google Calendar: при запуске приложение загружает в него текущую неделю и обновляет её каждый час.
+HTTP API получает расписание из InTime с применением blacklist. SQLite-файл `schedule.db` хранит исходное расписание и правила blacklist: при запуске приложение в фоне загружает текущую неделю и четыре следующие, по одной неделе, а затем повторяет проверку каждый час. После каждой успешно загруженной недели приложение пишет лог `schedule week loaded` с номером и датой начала недели. Исходные пары не удаляются из кэша blacklist-фильтром, поэтому их можно восстановить после удаления правила.
+
+## Blacklist пар
+
+Blacklist хранится в таблице `blacklist_rules` и управляется через API. Правило с `subject` полностью исключает предмет по точному названию. Правило с `date` и `number` исключает конкретную пару в конкретный день.
+
+Добавить правило для предмета:
+
+```bash
+curl -X POST http://localhost:8080/blacklist/ \
+    -H 'Content-Type: application/json' \
+    -d '{"subject":"Математика"}'
+```
+
+Добавить правило для конкретной пары:
+
+```bash
+curl -X POST http://localhost:8080/blacklist/ \
+    -H 'Content-Type: application/json' \
+    -d '{"date":"2026-09-07","number":2}'
+```
+
+Получить и удалить правила:
+
+```bash
+curl http://localhost:8080/blacklist/
+curl -X DELETE http://localhost:8080/blacklist/1
+```
+
+После добавления или удаления правила приложение сразу пересинхронизирует текущую и четыре следующие недели. Перед изменением Google Calendar оно проверяет существующие события: заблокированные события удаляются, а после снятия правила отсутствующие события создаются заново. Новые ответы расписания и последующие фоновые синхронизации также учитывают blacklist.
+
+```bash
+curl -X POST "http://localhost:8080/calendar/sync?date=2026-09-07"
+```
 
 ## Google Calendar
 
@@ -100,6 +133,24 @@ curl -X POST "http://localhost:8080/calendar/sync?date=2026-09-03"
 ```
 
 Ответ содержит начало недели и количество добавленных или обновленных пар.
+
+### CRUD ручных событий
+
+Ручные события создаются отдельно от событий расписания и не удаляются автоматической синхронизацией. Поля `start` и `end` передаются в RFC3339.
+
+```bash
+curl -X POST http://localhost:8080/calendar/events \
+    -H 'Content-Type: application/json' \
+    -d '{"summary":"Встреча","description":"Обсуждение проекта","location":"Аудитория 101","start":"2026-09-07T15:00:00+07:00","end":"2026-09-07T16:00:00+07:00"}'
+
+curl http://localhost:8080/calendar/events/EVENT_ID
+
+curl -X PUT http://localhost:8080/calendar/events/EVENT_ID \
+    -H 'Content-Type: application/json' \
+    -d '{"summary":"Встреча перенесена","start":"2026-09-07T16:00:00+07:00","end":"2026-09-07T17:00:00+07:00"}'
+
+curl -X DELETE http://localhost:8080/calendar/events/EVENT_ID
+```
 
 ### Очистка Google Calendar
 

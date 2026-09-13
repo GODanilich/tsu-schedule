@@ -16,12 +16,21 @@ import (
 )
 
 const calendarScope = "https://www.googleapis.com/auth/calendar.events"
-const sourceProperty = "tsu-schedule=true"
+const sourceProperty = "source=tsu-schedule"
 
 type Client struct {
 	service    *calendar.Service
 	calendarID string
 	timezone   string
+}
+
+type Event struct {
+	ID          string    `json:"id,omitempty"`
+	Summary     string    `json:"summary"`
+	Description string    `json:"description,omitempty"`
+	Location    string    `json:"location,omitempty"`
+	Start       time.Time `json:"start"`
+	End         time.Time `json:"end"`
 }
 
 type existingEvents struct {
@@ -98,6 +107,49 @@ func (c *Client) Sync(ctx context.Context, days []schedule.Day) (int, error) {
 	return synced, nil
 }
 
+// SyncLesson creates or updates exactly one lesson event.
+func (c *Client) SyncLesson(ctx context.Context, lesson schedule.Lesson) error {
+	existing, err := c.eventsCreatedByApp(ctx, []schedule.Day{{Date: lesson.Start, Lessons: []schedule.Lesson{lesson}}})
+	if err != nil {
+		return err
+	}
+	for _, eventID := range existing.legacy {
+		if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+			return fmt.Errorf("delete legacy lesson event: %w", err)
+		}
+	}
+
+	key := eventKey(lesson)
+	event := c.eventFor(lesson)
+	if eventID, ok := existing.byKey[key]; ok {
+		event.Id = eventID
+		if _, err := c.service.Events.Update(c.calendarID, eventID, event).Context(ctx).Do(); err != nil {
+			return fmt.Errorf("update lesson %q: %w", lesson.Title, err)
+		}
+		return nil
+	}
+	if _, err := c.service.Events.Insert(c.calendarID, event).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("create lesson %q: %w", lesson.Title, err)
+	}
+	return nil
+}
+
+// DeleteLesson removes only the event corresponding to the given lesson.
+func (c *Client) DeleteLesson(ctx context.Context, lesson schedule.Lesson) error {
+	existing, err := c.eventsCreatedByApp(ctx, []schedule.Day{{Date: lesson.Start, Lessons: []schedule.Lesson{lesson}}})
+	if err != nil {
+		return err
+	}
+	eventID, ok := existing.byKey[eventKey(lesson)]
+	if !ok {
+		return nil
+	}
+	if err := c.service.Events.Delete(c.calendarID, eventID).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("delete lesson %q: %w", lesson.Title, err)
+	}
+	return nil
+}
+
 // Clear removes every event from the configured calendar.
 func (c *Client) Clear(ctx context.Context) (int, error) {
 	eventIDs, err := c.eventIDs(ctx)
@@ -112,6 +164,56 @@ func (c *Client) Clear(ctx context.Context) (int, error) {
 	}
 
 	return len(eventIDs), nil
+}
+
+func (c *Client) CreateEvent(ctx context.Context, event Event) (Event, error) {
+	created, err := c.service.Events.Insert(c.calendarID, c.eventFrom(event)).Context(ctx).Do()
+	if err != nil {
+		return Event{}, fmt.Errorf("create calendar event: %w", err)
+	}
+	return c.eventTo(created), nil
+}
+
+func (c *Client) GetEvent(ctx context.Context, id string) (Event, error) {
+	event, err := c.service.Events.Get(c.calendarID, id).Context(ctx).Do()
+	if err != nil {
+		return Event{}, fmt.Errorf("get calendar event: %w", err)
+	}
+	return c.eventTo(event), nil
+}
+
+func (c *Client) UpdateEvent(ctx context.Context, id string, event Event) (Event, error) {
+	updated, err := c.service.Events.Update(c.calendarID, id, c.eventFrom(event)).Context(ctx).Do()
+	if err != nil {
+		return Event{}, fmt.Errorf("update calendar event: %w", err)
+	}
+	return c.eventTo(updated), nil
+}
+
+func (c *Client) DeleteEvent(ctx context.Context, id string) error {
+	if err := c.service.Events.Delete(c.calendarID, id).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("delete calendar event: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) eventFrom(event Event) *calendar.Event {
+	return &calendar.Event{
+		Summary: event.Summary, Description: event.Description, Location: event.Location,
+		Start: &calendar.EventDateTime{DateTime: event.Start.Format(time.RFC3339), TimeZone: c.timezone},
+		End:   &calendar.EventDateTime{DateTime: event.End.Format(time.RFC3339), TimeZone: c.timezone},
+	}
+}
+
+func (c *Client) eventTo(event *calendar.Event) Event {
+	result := Event{ID: event.Id, Summary: event.Summary, Description: event.Description, Location: event.Location}
+	if event.Start != nil {
+		result.Start, _ = time.Parse(time.RFC3339, event.Start.DateTime)
+	}
+	if event.End != nil {
+		result.End, _ = time.Parse(time.RFC3339, event.End.DateTime)
+	}
+	return result
 }
 
 func (c *Client) eventFor(lesson schedule.Lesson) *calendar.Event {
@@ -132,6 +234,9 @@ func (c *Client) eventFor(lesson schedule.Lesson) *calendar.Event {
 }
 
 func eventKey(lesson schedule.Lesson) string {
+	if lesson.ID != "" {
+		return lesson.ID
+	}
 	value := lesson.Start.Format("2006-01-02") + "\x00" + fmt.Sprint(lesson.Number) + "\x00" + lesson.Title + "\x00" + lesson.Professor + "\x00" + lesson.Audience
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
@@ -171,6 +276,9 @@ func (c *Client) eventsCreatedByApp(ctx context.Context, days []schedule.Day) (e
 			}
 			key := event.ExtendedProperties.Private["lesson_key"]
 			if key != "" {
+				if previousID, exists := existing.byKey[key]; exists {
+					existing.legacy = append(existing.legacy, previousID)
+				}
 				existing.byKey[key] = event.Id
 				continue
 			}
